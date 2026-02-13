@@ -53,13 +53,13 @@ const Login: React.FC<LoginProps> = ({ onLogin, onSignUp, users }) => {
 
       <div className="w-full max-w-md z-10">
         <div className="text-center mb-10 flex flex-col items-center">
-          <div className="bg-white p-6 rounded-3xl shadow-xl shadow-slate-200 mb-6">
-            <img 
-              src="https://aguiasistemas.com.br/wp-content/uploads/2022/10/logo-aguia-sistemas.svg" 
-              alt="Águia Sistemas" 
-              className="h-16 w-auto"
-            />
-          </div>
+        <div className="bg-[#003366] p-6 rounded-3xl shadow-xl shadow-slate-200 mb-6 flex justify-center">
+  <img 
+    src="https://aguiasistemas.com.br/wp-content/uploads/2023/07/logo-white.svg" 
+    alt="Águia Sistemas" 
+    className="h-16 w-auto"
+  />
+</div>
           <h1 className="text-3xl font-bold text-slate-800 mb-2">Águia Sistema</h1>
           <p className="text-slate-500">Gestão integrada da esteira industrial.</p>
         </div>
