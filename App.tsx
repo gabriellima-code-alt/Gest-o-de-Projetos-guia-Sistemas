@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Sector, 
   User, 
@@ -10,6 +10,7 @@ import {
   Announcement, 
   ChatMessage 
 } from './types';
+import { supabase } from './lib/supabase';
 import Login from './pages/Login';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
@@ -20,26 +21,56 @@ import CommercialHub from './pages/CommercialHub';
 import UserManagement from './pages/UserManagement';
 import AnnouncementsView from './pages/AnnouncementsView';
 
-const INITIAL_USERS: User[] = [
-  { id: '1', name: 'Gestor Master', email: 'admin@company.com', sector: Sector.GESTOR, isAdmin: true, password: 'admin' },
-  { id: '2', name: 'João Comercial', email: 'joao@comercial.com', sector: Sector.COMERCIAL, isAdmin: false },
-  { id: '3', name: 'Alice Qualidade', email: 'alice@qualidade.com', sector: Sector.QUALIDADE, isAdmin: false }
-];
-
-const INITIAL_CLIENTS: Client[] = [
-  { id: 'c1', name: 'Fábrica Alpha', email: 'contato@alpha.com', phone: '11 9999-9999', isLead: false, notes: 'Cliente recorrente.' },
-  { id: 'c2', name: 'Construtora Beta', email: 'lead@beta.com', phone: '11 8888-8888', isLead: true, notes: 'Interessado em estrutura metálica.' }
-];
-
 const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [users, setUsers] = useState<User[]>(INITIAL_USERS);
+  const [users, setUsers] = useState<User[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
-  const [clients, setClients] = useState<Client[]>(INITIAL_CLIENTS);
+  const [clients, setClients] = useState<Client[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [currentPage, setCurrentPage] = useState<'DASHBOARD' | 'PROJECTS' | 'SECTORS' | 'COMMERCIAL' | 'USERS' | 'ANNOUNCEMENTS'>('DASHBOARD');
   const [selectedSectorFilter, setSelectedSectorFilter] = useState<Sector | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  // Carregamento inicial de dados do Banco SQL
+  useEffect(() => {
+    const fetchData = async () => {
+      setLoading(true);
+      
+      // Busca Projetos
+      const { data: projData } = await supabase
+        .from('projects')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (projData) setProjects(projData as any);
+
+      // Busca Clientes
+      const { data: clientData } = await supabase
+        .from('clients')
+        .select('*');
+      if (clientData) setClients(clientData);
+
+      // Busca Perfis de Usuários
+      const { data: profileData } = await supabase
+        .from('profiles')
+        .select('*');
+      if (profileData) setUsers(profileData as any);
+
+      setLoading(false);
+    };
+
+    fetchData();
+    
+    // Inscrição em Tempo Real para Projetos
+    const channel = supabase
+      .channel('schema-db-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'projects' }, () => {
+        fetchData();
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, []);
 
   const handleLogin = (user: User) => {
     setCurrentUser(user);
@@ -48,136 +79,115 @@ const App: React.FC = () => {
     else setCurrentPage('DASHBOARD');
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
     setCurrentUser(null);
     setCurrentPage('DASHBOARD');
   };
 
-  const handleSignUp = (newUser: User) => {
-    setUsers(prev => [...prev, newUser]);
-    handleLogin(newUser);
+  const handleSignUp = async (newUser: User) => {
+    // No Supabase real, usaríamos supabase.auth.signUp
+    // Aqui simulamos a inserção no banco SQL
+    const { data, error } = await supabase
+      .from('profiles')
+      .insert([{ 
+        id: newUser.id, 
+        name: newUser.name, 
+        email: newUser.email, 
+        sector: newUser.sector, 
+        is_admin: newUser.isAdmin 
+      }]);
+    
+    if (!error) {
+      setUsers(prev => [...prev, newUser]);
+      handleLogin(newUser);
+    }
   };
 
-  const deleteUser = (id: string) => {
-    setUsers(prev => prev.filter(u => u.id !== id));
+  const deleteUser = async (id: string) => {
+    const { error } = await supabase.from('profiles').delete().eq('id', id);
+    if (!error) setUsers(prev => prev.filter(u => u.id !== id));
   };
 
-  const addProject = (p: Omit<Project, 'id' | 'createdAt' | 'history' | 'status' | 'currentSector'>) => {
-    const newProject: Project = {
-      ...p,
-      id: Math.random().toString(36).substr(2, 9),
-      createdAt: new Date().toISOString(),
-      status: 'ACTIVE',
-      currentSector: Sector.COMERCIAL,
-      history: [{
-        id: Math.random().toString(36).substr(2, 9),
-        sector: Sector.COMERCIAL,
-        user: currentUser?.name || 'Sistema',
-        timestamp: new Date().toISOString(),
-        action: 'ENTRY'
-      }]
-    };
-    setProjects(prev => [newProject, ...prev]);
+  const addProject = async (p: any) => {
+    const { data, error } = await supabase
+      .from('projects')
+      .insert([{
+        client_name: p.clientName,
+        requirements: p.requirements,
+        deadline: p.deadline,
+        priority: p.priority,
+        current_sector: Sector.COMERCIAL,
+        status: 'ACTIVE'
+      }])
+      .select();
+
+    if (!error && data) {
+      // O useEffect cuidará da atualização via Realtime ou fetch
+    }
   };
 
-  const advanceProject = (projectId: string, notes?: string) => {
-    setProjects(prev => prev.map(proj => {
-      if (proj.id !== projectId) return proj;
-      
-      let nextSector: Sector | undefined;
+  const advanceProject = async (projectId: string, notes?: string) => {
+    const proj = projects.find(p => p.id === projectId);
+    if (!proj) return;
 
-      // Regra 1: Se o projeto estava em correção (rejeitado), ele volta direto para a QUALIDADE
-      if (proj.lastRejectionSector) {
-        nextSector = Sector.QUALIDADE;
-      } 
-      // Regra 2: Se a QUALIDADE aprova, vai direto para MONTAGEM
-      else if (proj.currentSector === Sector.QUALIDADE) {
-        nextSector = Sector.MONTAGEM;
-      }
-      // Regra 3: Fluxo Linear normal
-      else {
-        const currentIndex = SECTOR_ORDER.indexOf(proj.currentSector);
-        nextSector = SECTOR_ORDER[currentIndex + 1];
-      }
+    let nextSector: Sector | undefined;
+    if (proj.lastRejectionSector) {
+      nextSector = Sector.QUALIDADE;
+    } else if (proj.currentSector === Sector.QUALIDADE) {
+      nextSector = Sector.MONTAGEM;
+    } else {
+      const currentIndex = SECTOR_ORDER.indexOf(proj.currentSector);
+      nextSector = SECTOR_ORDER[currentIndex + 1];
+    }
 
-      if (!nextSector) return { ...proj, status: 'FINISHED' as const };
+    const isFinished = nextSector === Sector.CONCLUSAO || !nextSector;
 
-      // Se chegamos no último setor da lista (Conclusão), marcamos como finalizado
-      const isFinished = nextSector === Sector.CONCLUSAO;
-
-      return {
-        ...proj,
-        currentSector: nextSector,
-        status: isFinished ? 'FINISHED' as const : 'ACTIVE' as const,
-        lastRejectionReason: undefined,
-        lastRejectionSector: undefined, // Limpa o estado de correção ao avançar
-        history: [...proj.history, {
-          id: Math.random().toString(36).substr(2, 9),
-          sector: nextSector,
-          user: currentUser?.name || 'Operador',
-          timestamp: new Date().toISOString(),
-          action: 'EXIT',
-          notes
-        }]
-      };
-    }));
+    await supabase
+      .from('projects')
+      .update({
+        current_sector: nextSector || Sector.CONCLUSAO,
+        status: isFinished ? 'FINISHED' : 'ACTIVE',
+        last_rejection_reason: null,
+        last_rejection_sector: null
+      })
+      .eq('id', projectId);
   };
 
-  const rejectProject = (projectId: string, reason: string, targetSector?: Sector) => {
-    setProjects(prev => prev.map(proj => {
-      if (proj.id !== projectId) return proj;
-      
-      // Se não for especificado, volta para o anterior, mas o requisito pede seletor
-      const fallbackSector = proj.history[proj.history.length - 2]?.sector || Sector.COMERCIAL;
-      const destination = targetSector || fallbackSector;
-
-      return {
-        ...proj,
-        currentSector: destination,
-        lastRejectionReason: reason,
-        lastRejectionSector: Sector.QUALIDADE, // Marca que veio da Qualidade para saber onde voltar
-        history: [...proj.history, {
-          id: Math.random().toString(36).substr(2, 9),
-          sector: destination,
-          user: currentUser?.name || 'Qualidade',
-          timestamp: new Date().toISOString(),
-          action: 'REJECTION',
-          notes: reason
-        }]
-      };
-    }));
+  const rejectProject = async (projectId: string, reason: string, targetSector?: Sector) => {
+    await supabase
+      .from('projects')
+      .update({
+        current_sector: targetSector,
+        last_rejection_reason: reason,
+        last_rejection_sector: Sector.QUALIDADE
+      })
+      .eq('id', projectId);
   };
 
-  const addClient = (c: Omit<Client, 'id'>) => {
-    const newClient: Client = {
-      ...c,
-      id: Math.random().toString(36).substr(2, 9)
-    };
-    setClients(prev => [...prev, newClient]);
-  };
-
-  const sendAnnouncement = (ann: Omit<Announcement, 'id' | 'timestamp' | 'read' | 'from'>) => {
-    setAnnouncements(prev => [{
-      ...ann,
-      id: Math.random().toString(36).substr(2, 9),
-      from: currentUser?.name || 'Gestor',
-      timestamp: new Date().toISOString(),
-      read: false
-    }, ...prev]);
-  };
-
-  const sendChatMessage = (content: string) => {
-    setChatMessages(prev => [...prev, {
-      id: Math.random().toString(36).substr(2, 9),
-      senderId: currentUser?.id || '0',
-      senderName: currentUser?.name || 'User',
-      content,
-      timestamp: new Date().toISOString()
-    }]);
+  const addClient = async (c: any) => {
+    const { error } = await supabase
+      .from('clients')
+      .insert([c]);
+    
+    if (!error) {
+      // Refresh local data
+      const { data } = await supabase.from('clients').select('*');
+      if (data) setClients(data);
+    }
   };
 
   if (!currentUser) {
     return <Login onLogin={handleLogin} onSignUp={handleSignUp} users={users} />;
+  }
+
+  if (loading) {
+    return (
+      <div className="h-screen w-full flex flex-col items-center justify-center bg-slate-50">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-700 mb-4"></div>
+        <p className="text-slate-500 font-medium">Sincronizando com Águia Database...</p>
+      </div>
+    );
   }
 
   return (
@@ -211,7 +221,7 @@ const App: React.FC = () => {
               onAddClient={addClient} 
               onAddProject={addProject}
               messages={chatMessages}
-              onSendMessage={sendChatMessage}
+              onSendMessage={(msg) => console.log('Chat via Supabase a implementar')}
             />
           )}
           {currentPage === 'USERS' && <UserManagement users={users} onDeleteUser={deleteUser} user={currentUser} />}
@@ -219,7 +229,7 @@ const App: React.FC = () => {
             <AnnouncementsView 
               announcements={announcements} 
               user={currentUser} 
-              onSend={sendAnnouncement}
+              onSend={(ann) => console.log('Avisos via Supabase a implementar')}
               users={users}
             />
           )}
