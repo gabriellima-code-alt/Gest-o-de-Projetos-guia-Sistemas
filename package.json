@@ -1,5 +1,5 @@
 {
-  "name": "águia-sistema---gestão-de-projetos",
+  "name": "aguia-sistema-gestao-de-projetos",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -12,7 +12,8 @@
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "lucide-react": "^0.564.0",
-    "recharts": "^3.7.0"
+    "recharts": "^3.7.0",
+    "@supabase/supabase-js": "^2.49.8"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
