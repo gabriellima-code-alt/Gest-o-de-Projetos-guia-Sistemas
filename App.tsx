@@ -1,14 +1,13 @@
-
 import React, { useState, useEffect } from 'react';
-import { 
-  Sector, 
-  User, 
-  Project, 
-  SECTOR_ORDER, 
-  ProjectPriority, 
-  Client, 
-  Announcement, 
-  ChatMessage 
+import {
+  Sector,
+  User,
+  Project,
+  SECTOR_ORDER,
+  ProjectPriority,
+  Client,
+  Announcement,
+  ChatMessage
 } from './types';
 import { supabase } from './lib/supabase';
 import Login from './pages/Login';
@@ -31,37 +30,90 @@ const App: React.FC = () => {
   const [currentPage, setCurrentPage] = useState<'DASHBOARD' | 'PROJECTS' | 'SECTORS' | 'COMMERCIAL' | 'USERS' | 'ANNOUNCEMENTS'>('DASHBOARD');
   const [selectedSectorFilter, setSelectedSectorFilter] = useState<Sector | null>(null);
   const [loading, setLoading] = useState(true);
+  const [authLoading, setAuthLoading] = useState(true);
 
-  // Carregamento inicial de dados do Banco SQL
+  // Verifica sessão ativa ao carregar
   useEffect(() => {
+    const checkSession = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user) {
+        await loadUserProfile(session.user.id, session.user.email || '');
+      }
+      setAuthLoading(false);
+    };
+
+    checkSession();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'SIGNED_IN' && session?.user) {
+        await loadUserProfile(session.user.id, session.user.email || '');
+      } else if (event === 'SIGNED_OUT') {
+        setCurrentUser(null);
+        setCurrentPage('DASHBOARD');
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const loadUserProfile = async (userId: string, email: string) => {
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', userId)
+      .single();
+
+    if (profile) {
+      const user: User = {
+        id: profile.id,
+        name: profile.name || email,
+        email: email,
+        sector: profile.sector as Sector || Sector.COMERCIAL,
+        isAdmin: profile.is_admin || false,
+      };
+      handleLoginRedirect(user);
+    }
+  };
+
+  // Carregamento de dados
+  useEffect(() => {
+    if (!currentUser) return;
+
     const fetchData = async () => {
       setLoading(true);
-      
-      // Busca Projetos
+
       const { data: projData } = await supabase
         .from('projects')
         .select('*')
         .order('created_at', { ascending: false });
       if (projData) setProjects(projData as any);
 
-      // Busca Clientes
       const { data: clientData } = await supabase
         .from('clients')
         .select('*');
       if (clientData) setClients(clientData);
 
-      // Busca Perfis de Usuários
       const { data: profileData } = await supabase
         .from('profiles')
         .select('*');
-      if (profileData) setUsers(profileData as any);
+      if (profileData) {
+        // Busca emails do auth (apenas para admins via profiles)
+        const usersWithEmail: User[] = profileData.map((p: any) => ({
+          id: p.id,
+          name: p.name || 'Usuário',
+          email: p.email || '',
+          sector: p.sector as Sector,
+          isAdmin: p.is_admin,
+        }));
+        setUsers(usersWithEmail);
+      }
 
       setLoading(false);
     };
 
     fetchData();
-    
-    // Inscrição em Tempo Real para Projetos
+
+    // Realtime para projetos
     const channel = supabase
       .channel('schema-db-changes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'projects' }, () => {
@@ -70,13 +122,20 @@ const App: React.FC = () => {
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, []);
+  }, [currentUser]);
 
-  const handleLogin = (user: User) => {
+  const handleLoginRedirect = (user: User) => {
     setCurrentUser(user);
     if (user.sector === Sector.COMERCIAL) setCurrentPage('COMMERCIAL');
     else if (user.sector !== Sector.GESTOR) setCurrentPage('SECTORS');
     else setCurrentPage('DASHBOARD');
+  };
+
+  // Login via Supabase Auth
+  const handleLogin = async (email: string, password: string): Promise<string | null> => {
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) return error.message;
+    return null;
   };
 
   const handleLogout = async () => {
@@ -85,23 +144,34 @@ const App: React.FC = () => {
     setCurrentPage('DASHBOARD');
   };
 
-  const handleSignUp = async (newUser: User) => {
-    // No Supabase real, usaríamos supabase.auth.signUp
-    // Aqui simulamos a inserção no banco SQL
-    const { data, error } = await supabase
-      .from('profiles')
-      .insert([{ 
-        id: newUser.id, 
-        name: newUser.name, 
-        email: newUser.email, 
-        sector: newUser.sector, 
-        is_admin: newUser.isAdmin 
-      }]);
-    
-    if (!error) {
-      setUsers(prev => [...prev, newUser]);
-      handleLogin(newUser);
+  // Cadastro via Supabase Auth
+  const handleSignUp = async (newUser: {
+    name: string;
+    email: string;
+    password: string;
+    sector: Sector;
+  }): Promise<string | null> => {
+    const { data, error } = await supabase.auth.signUp({
+      email: newUser.email,
+      password: newUser.password,
+    });
+
+    if (error) return error.message;
+
+    if (data.user) {
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .insert([{
+          id: data.user.id,
+          name: newUser.name,
+          sector: newUser.sector,
+          is_admin: newUser.sector === Sector.GESTOR,
+        }]);
+
+      if (profileError) return profileError.message;
     }
+
+    return null;
   };
 
   const deleteUser = async (id: string) => {
@@ -110,7 +180,7 @@ const App: React.FC = () => {
   };
 
   const addProject = async (p: any) => {
-    const { data, error } = await supabase
+    await supabase
       .from('projects')
       .insert([{
         client_name: p.clientName,
@@ -118,38 +188,34 @@ const App: React.FC = () => {
         deadline: p.deadline,
         priority: p.priority,
         current_sector: Sector.COMERCIAL,
-        status: 'ACTIVE'
-      }])
-      .select();
-
-    if (!error && data) {
-      // O useEffect cuidará da atualização via Realtime ou fetch
-    }
+        status: 'ACTIVE',
+        history: [],
+      }]);
   };
 
-  const advanceProject = async (projectId: string, notes?: string) => {
+  const advanceProject = async (projectId: string) => {
     const proj = projects.find(p => p.id === projectId);
     if (!proj) return;
 
-    let nextSector: Sector | undefined;
+    let nextSector: Sector;
     if (proj.lastRejectionSector) {
       nextSector = Sector.QUALIDADE;
     } else if (proj.currentSector === Sector.QUALIDADE) {
       nextSector = Sector.MONTAGEM;
     } else {
       const currentIndex = SECTOR_ORDER.indexOf(proj.currentSector);
-      nextSector = SECTOR_ORDER[currentIndex + 1];
+      nextSector = SECTOR_ORDER[currentIndex + 1] || Sector.CONCLUSAO;
     }
 
-    const isFinished = nextSector === Sector.CONCLUSAO || !nextSector;
+    const isFinished = nextSector === Sector.CONCLUSAO;
 
     await supabase
       .from('projects')
       .update({
-        current_sector: nextSector || Sector.CONCLUSAO,
+        current_sector: nextSector,
         status: isFinished ? 'FINISHED' : 'ACTIVE',
         last_rejection_reason: null,
-        last_rejection_sector: null
+        last_rejection_sector: null,
       })
       .eq('id', projectId);
   };
@@ -160,25 +226,34 @@ const App: React.FC = () => {
       .update({
         current_sector: targetSector,
         last_rejection_reason: reason,
-        last_rejection_sector: Sector.QUALIDADE
+        last_rejection_sector: Sector.QUALIDADE,
       })
       .eq('id', projectId);
   };
 
   const addClient = async (c: any) => {
-    const { error } = await supabase
-      .from('clients')
-      .insert([c]);
-    
-    if (!error) {
-      // Refresh local data
-      const { data } = await supabase.from('clients').select('*');
-      if (data) setClients(data);
-    }
+    await supabase.from('clients').insert([c]);
+    const { data } = await supabase.from('clients').select('*');
+    if (data) setClients(data);
   };
 
+  // Tela de carregamento inicial (verificando sessão)
+  if (authLoading) {
+    return (
+      <div className="h-screen w-full flex flex-col items-center justify-center bg-slate-50">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-700 mb-4"></div>
+        <p className="text-slate-500 font-medium">Verificando sessão...</p>
+      </div>
+    );
+  }
+
   if (!currentUser) {
-    return <Login onLogin={handleLogin} onSignUp={handleSignUp} users={users} />;
+    return (
+      <Login
+        onLogin={handleLogin}
+        onSignUp={handleSignUp}
+      />
+    );
   }
 
   if (loading) {
@@ -192,9 +267,9 @@ const App: React.FC = () => {
 
   return (
     <div className="flex h-screen overflow-hidden">
-      <Sidebar 
-        user={currentUser} 
-        currentPage={currentPage} 
+      <Sidebar
+        user={currentUser}
+        currentPage={currentPage}
         setCurrentPage={setCurrentPage}
         onLogout={handleLogout}
         setSelectedSectorFilter={setSelectedSectorFilter}
@@ -205,20 +280,20 @@ const App: React.FC = () => {
           {currentPage === 'DASHBOARD' && <Dashboard projects={projects} user={currentUser} onAddProject={addProject} />}
           {currentPage === 'PROJECTS' && <ProjectsList projects={projects} user={currentUser} initialSectorFilter={selectedSectorFilter} />}
           {currentPage === 'SECTORS' && (
-            <SectorQueue 
-              projects={projects} 
-              user={currentUser} 
-              onAdvance={advanceProject} 
+            <SectorQueue
+              projects={projects}
+              user={currentUser}
+              onAdvance={advanceProject}
               onReject={rejectProject}
               sector={currentUser.isAdmin ? (selectedSectorFilter || Sector.COMERCIAL) : currentUser.sector}
             />
           )}
           {currentPage === 'COMMERCIAL' && (
-            <CommercialHub 
-              user={currentUser} 
-              projects={projects} 
-              clients={clients} 
-              onAddClient={addClient} 
+            <CommercialHub
+              user={currentUser}
+              projects={projects}
+              clients={clients}
+              onAddClient={addClient}
               onAddProject={addProject}
               messages={chatMessages}
               onSendMessage={(msg) => console.log('Chat via Supabase a implementar')}
@@ -226,9 +301,9 @@ const App: React.FC = () => {
           )}
           {currentPage === 'USERS' && <UserManagement users={users} onDeleteUser={deleteUser} user={currentUser} />}
           {currentPage === 'ANNOUNCEMENTS' && (
-            <AnnouncementsView 
-              announcements={announcements} 
-              user={currentUser} 
+            <AnnouncementsView
+              announcements={announcements}
+              user={currentUser}
               onSend={(ann) => console.log('Avisos via Supabase a implementar')}
               users={users}
             />
